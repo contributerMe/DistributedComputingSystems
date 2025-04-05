@@ -26,8 +26,7 @@ public class RicartAgrawala {
     private final CountDownLatch connectionLatch;
     private final Scanner scanner = new Scanner(System.in);
     private final Object csMonitor = new Object();
-
-    boolean inCriticalSection = false;
+    private boolean inCriticalSection = false;
 
     public RicartAgrawala(int pid, List<Integer> allPids) {
         this.pid = pid;
@@ -38,11 +37,11 @@ public class RicartAgrawala {
 
     public void start() {
         try {
-            System.out.println("Process [" + pid + "] Starting process...");
+            System.out.println("[" + pid + "] Starting process...");
             
             // Start server first
             serverSocket = new ServerSocket(BASE_PORT + pid);
-            System.out.println("Process [" + pid + "] Listening on port " + (BASE_PORT + pid));
+            System.out.println("[" + pid + "] Listening on port " + (BASE_PORT + pid));
             new Thread(this::listenForMessages).start();
 
             // Connect to other processes with retries
@@ -50,12 +49,12 @@ public class RicartAgrawala {
 
             // Wait for all connections to establish
             if (!connectionLatch.await(15, TimeUnit.SECONDS)) {
-                System.err.println("Process [" + pid + "] Failed to establish all connections");
-                System.err.println("Process [" + pid + "] Connected to: " + clientSockets.keySet());
+                System.err.println("[" + pid + "] Failed to establish all connections");
+                System.err.println("[" + pid + "] Connected to: " + clientSockets.keySet());
                 return;
             }
 
-            System.out.println("Process [" + pid + "] Successfully connected to all other processes");
+            System.out.println("[" + pid + "] Successfully connected to all other processes");
             
             // Main control loop
             while (true) {
@@ -66,7 +65,7 @@ public class RicartAgrawala {
                 System.out.print("Enter choice:\n");
                 
                 int choice = scanner.nextInt();
-                scanner.nextLine(); 
+                scanner.nextLine(); // Consume newline
                 
                 switch (choice) {
                     case 1:
@@ -80,7 +79,7 @@ public class RicartAgrawala {
                         System.exit(0);
                         break;
                     default:
-                        System.out.println("Process [" + pid + "] Invalid choice");
+                        System.out.println("[" + pid + "] Invalid choice");
                 }
             }
 
@@ -112,7 +111,7 @@ public class RicartAgrawala {
                     clientSockets.put(otherPid, socket);
                     writers.put(otherPid, new PrintWriter(socket.getOutputStream(), true));
                 }
-                System.out.println("Process [" + pid + "] Connected to process " + otherPid);
+                System.out.println("[" + pid + "] Connected to process " + otherPid);
                 connectionLatch.countDown();
                 return;
             } catch (IOException e) {
@@ -126,7 +125,7 @@ public class RicartAgrawala {
                 }
             }
         }
-        System.err.println("Process [" + pid + "] Failed to connect to process " + otherPid);
+        System.err.println("[" + pid + "] Failed to connect to process " + otherPid);
     }
 
     private void listenForMessages() {
@@ -150,7 +149,7 @@ public class RicartAgrawala {
                 processMessage(message);
             }
         } catch (IOException e) {
-            System.err.println("Process [" + pid + "] Error handling client: " + e.getMessage());
+            System.err.println("[" + pid + "] Error handling client: " + e.getMessage());
         }
     }
 
@@ -165,35 +164,34 @@ public class RicartAgrawala {
         clock.updateAndGet(curr -> Math.max(curr, timestamp) + 1);
 
         if (type.equals(REQUEST)) {
-            System.out.println("Process [" + pid + "] Received REQUEST from " + 
+            System.out.println("[" + pid + "] Received REQUEST from " + 
                              senderPid + " with ts " + timestamp);
             handleRequest(senderPid, timestamp);
         } else if (type.equals(REPLY)) {
-            System.out.println("Process [" + pid + "] Received REPLY from " + 
+            System.out.println("[" + pid + "] Received REPLY from " + 
                              senderPid + " with ts " + timestamp);
             repliesReceived.add(senderPid);
             notifyAll(); // Notify waiting requestCriticalSection()
         }
     }
-
-  private synchronized void requestCriticalSection() {
+    private synchronized void requestCriticalSection() {
         if (state == HELD) {
-            System.err.println("Process [" + pid + "] Already in critical section!");
+            System.err.println("[" + pid + "] Already in critical section!");
             return;
         }
         
-        // System.out.println("Process [" + pid + "] Transitioning to WANTED state");
+        System.out.println("[" + pid + "] Transitioning to WANTED state");
         state = WANTED;
         int newClock = clock.incrementAndGet();
         currentRequest = new Request(newClock, pid);
         repliesReceived.clear();
 
-        System.out.println("Process [" + pid + "] Requesting CS with timestamp " + newClock);
+        System.out.println("[" + pid + "] Requesting CS with timestamp " + newClock);
 
         // Send request to all connected processes
         List<Integer> connectedPids = new ArrayList<>(clientSockets.keySet());
         if (connectedPids.isEmpty()) {
-            System.err.println("Process [" + pid + "] No connections established - cannot request CS");
+            System.err.println("[" + pid + "] No connections established - cannot request CS");
             state = RELEASED;
             return;
         }
@@ -205,8 +203,8 @@ public class RicartAgrawala {
         // Wait for replies with timeout
         long startTime = System.currentTimeMillis();
         while (repliesReceived.size() < connectedPids.size()) {
-            if (System.currentTimeMillis() - startTime > 25000) {
-                System.err.println("Process [" + pid + "] Waiting for replies.... timed out");
+            if (System.currentTimeMillis() - startTime > 50000) {
+                System.err.println("[" + pid + "] Aborting due to timeout of 50 seconds");
                 state = RELEASED;
                 currentRequest = null;
                 return;
@@ -226,19 +224,19 @@ public class RicartAgrawala {
             state = HELD;
             enterCriticalSection();
         } else {
-            System.err.println("Process [" + pid + "] Missing replies from " + 
+            System.err.println("[" + pid + "] Missing replies from " + 
                              (connectedPids.size() - repliesReceived.size()) + " processes");
             state = RELEASED;
             currentRequest = null;
         }
     }
 
-  private synchronized void handleRequest(int senderPid, int timestamp) {
+    private synchronized void handleRequest(int senderPid, int timestamp) {
         // Update clock first
         clock.updateAndGet(curr -> Math.max(curr, timestamp) + 1);
 
         if (state == RELEASED) {
-            // System.out.println("Process [" + pid + "] Immediately replying to " + senderPid + " (RELEASED state)");
+            System.out.println("[" + pid + "] Immediately replying to " + senderPid + " (RELEASED state)");
             sendMessage(senderPid, REPLY, clock.get());
             return;
         }
@@ -250,22 +248,23 @@ public class RicartAgrawala {
                            (currentRequest.timestamp == timestamp && pid < senderPid)));
 
         if (shouldDefer) {
-            System.out.println("Process [" + pid + "] Deferring request from " + senderPid + 
+            System.out.println("[" + pid + "] Deferring request from " + senderPid + 
                              " (my ts: " + currentRequest.timestamp + ")");
             requestQueue.add(new Request(timestamp, senderPid));
         } else {
-            System.out.println("Process [" + pid + "] Immediately replying to " + senderPid);
+            System.out.println("[" + pid + "] Immediately replying to " + senderPid);
             sendMessage(senderPid, REPLY, clock.get());
         }
     }
+
     private void enterCriticalSection() {
         synchronized (csMonitor) {
             inCriticalSection = true;
-            System.out.println("\n========== Process [" + pid + "] ENTERED THE CRITICAL SECTION ==========");
+            System.out.println("\n========== [" + pid + "] ENTERED CRITICAL SECTION ==========");
             
-            
+            // Simulate work in critical section
             try {
-                Thread.sleep(20000); 
+                Thread.sleep(20000); // Simulated work
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -275,12 +274,12 @@ public class RicartAgrawala {
     }
     private synchronized void releaseCriticalSection() {
         if (state != HELD) {
-            System.err.println("Process [" + pid + "] is NOT in critical section! Cannot release.");
+            System.err.println("[" + pid + "] Cannot release CS - not in HELD state");
             return;
         }
         
-        System.out.println("Process [" + pid + "] Releasing critical section");
-        System.out.println("============== Process [" + pid + "] EXITED THE CRITICAL SECTION =============\n");
+        System.out.println("[" + pid + "] Releasing critical section");
+        System.out.println("========== [" + pid + "] EXITED CRITICAL SECTION ==========\n");
         
         state = RELEASED;
         inCriticalSection = false;
@@ -289,27 +288,26 @@ public class RicartAgrawala {
         // Process all deferred requests
         while (!requestQueue.isEmpty()) {
             Request deferredRequest = requestQueue.poll();
-            System.out.println("Process [" + pid + "] Sending deferred reply to " + deferredRequest.pid);
+            System.out.println("[" + pid + "] Sending deferred reply to " + deferredRequest.pid);
             sendMessage(deferredRequest.pid, REPLY, clock.incrementAndGet());
         }
         
         notifyAll(); // Notify any waiting threads
     }
-
     private synchronized void sendMessage(int receiverPid, String type, int timestamp) {
         PrintWriter writer = writers.get(receiverPid);
         if (writer != null) {
             writer.println(type + ":" + pid + ":" + timestamp);
-            System.out.println("Process [" + pid + "] Sent " + type + " to " + 
+            System.out.println("[" + pid + "] Sent " + type + " to " + 
                             receiverPid + " with ts " + timestamp);
         } else {
-            System.err.println("Process [" + pid + "] No active connection to process " + receiverPid);
+            System.err.println("[" + pid + "] No active connection to process " + receiverPid);
         }
     }
 
     private void cleanup() {
         try {
-            System.out.println("Process [" + pid + "] Cleaning up resources...");
+            System.out.println("[" + pid + "] Cleaning up resources...");
             executor.shutdown();
             if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
                 executor.shutdownNow();
@@ -327,7 +325,7 @@ public class RicartAgrawala {
             }
             scanner.close();
         } catch (IOException | InterruptedException e) {
-            System.err.println("Process [" + pid + "] Cleanup error: " + e.getMessage());
+            System.err.println("[" + pid + "] Cleanup error: " + e.getMessage());
         }
     }
 
@@ -351,7 +349,7 @@ public class RicartAgrawala {
 
     public static void main(String[] args) {
         if (args.length != 2) {
-            System.err.println("Invalid command! use below format: \n RicartAgrawala <pid> <all_pids>");
+            System.err.println("Usage: java RicartAgrawala <pid> <all_pids_comma_separated>");
             System.exit(1);
         }
 
@@ -369,4 +367,6 @@ public class RicartAgrawala {
         RicartAgrawala process = new RicartAgrawala(pid, allPids);
         process.start();
     }
+
 }
+
